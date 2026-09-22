@@ -1,0 +1,38 @@
+[
+  {
+    "ticker": "AAPL",
+    "is_holding": true,
+    "avg_price": 307.82,
+    "quantity": 0.330131
+  },
+  {
+    "ticker": "SPYG",
+    "is_holding": true,
+    "avg_price": 118.3,
+    "quantity": 1.304608
+  },
+  {
+    "ticker": "VRT",
+    "is_holding": true,
+    "avg_price": 238.67,
+    "quantity": 0.057441
+  },
+  {
+    "ticker": "AVGO",
+    "is_holding": true,
+    "avg_price": 346.0,
+    "quantity": 0.111529
+  },
+  {
+    "ticker": "GOOGL",
+    "is_holding": true,
+    "avg_price": 348.59,
+    "quantity": 0.243916
+  },
+  {
+    "ticker": "QQQ",
+    "is_holding": true,
+    "avg_price": 601.9,
+    "quantity": 2.0
+  }
+]
