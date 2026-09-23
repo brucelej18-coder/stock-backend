@@ -23,6 +23,7 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "stocks_data.json")
 
+# 사용자 보유 종목 및 평단가 영구 고정
 DEFAULT_STOCKS = [
     {"ticker": "VRT", "is_holding": True, "avg_price": 243.44, "quantity": 0.082439},
     {"ticker": "AVGO", "is_holding": True, "avg_price": 348.93, "quantity": 0.136757},
@@ -58,7 +59,7 @@ class StockItem(BaseModel):
     quantity: Optional[float] = 0.0
 
 def translate_to_korean(text: str) -> str:
-    """영문 뉴스를 한국어로 간이 번역하는 안전 함수"""
+    """영문 뉴스를 한국어로 자동 번역"""
     if not text:
         return ""
     try:
@@ -113,17 +114,20 @@ def calculate_ai_strategy(close_series, high_series, low_series, current_price, 
     ], axis=1).max(axis=1)
     atr = float(tr.rolling(window=14).mean().iloc[-1]) if len(tr) >= 14 else (current_price * 0.03)
 
+    # 1. AI 목표 익절가
     resistance = max(bb_upper, recent_high)
     if resistance <= current_price:
         target_sell = round(current_price + (atr * 1.8), 2)
     else:
         target_sell = round(resistance, 2)
 
+    # 2. AI 추천 매수가 (20일선 눌림목)
     if current_price > ma20:
         target_buy = round(ma20, 2)
     else:
         target_buy = round(max(bb_lower, recent_low), 2)
 
+    # 3. AI 손절 방어선
     support = min(ma20, bb_lower)
     ai_stop_loss = round(support - (atr * 0.8), 2)
     if ai_stop_loss >= current_price or (current_price - ai_stop_loss) > (current_price * 0.12):
@@ -143,7 +147,8 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
     candles = []
 
     try:
-        df = yf.download(ticker, period="1mo", interval="1d", progress=False)
+        # 최근 3달치 일봉 데이터 수집
+        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
         if df is None or len(df) < 5:
             raise ValueError("데이터 부족")
 
@@ -160,8 +165,8 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
 
         current_price = float(close_s.iloc[-1])
 
-        # 최근 15개 봉의 양봉/음봉 캔들 데이터 추출 [Open, High, Low, Close]
-        recent_df = pd.DataFrame({'Open': open_s, 'High': high_s, 'Low': low_s, 'Close': close_s}).tail(15)
+        # 최근 60거래일(약 3달) 캔들 추출
+        recent_df = pd.DataFrame({'Open': open_s, 'High': high_s, 'Low': low_s, 'Close': close_s}).tail(60)
         for _, row in recent_df.iterrows():
             candles.append({
                 "open": round(float(row["Open"]), 2),
