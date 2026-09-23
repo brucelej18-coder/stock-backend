@@ -23,7 +23,7 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "stocks_data.json")
 
-# 사용자 보유 종목 및 평단가 영구 고정
+# 기본 포트폴리오 세팅
 DEFAULT_STOCKS = [
     {"ticker": "VRT", "is_holding": True, "avg_price": 243.44, "quantity": 0.082439},
     {"ticker": "AVGO", "is_holding": True, "avg_price": 348.93, "quantity": 0.136757},
@@ -59,7 +59,7 @@ class StockItem(BaseModel):
     quantity: Optional[float] = 0.0
 
 def translate_to_korean(text: str) -> str:
-    """영문 뉴스를 한국어로 자동 번역"""
+    """영문 뉴스를 한국어로 번역"""
     if not text:
         return ""
     try:
@@ -67,8 +67,7 @@ def translate_to_korean(text: str) -> str:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            translated = "".join([part[0] for part in data[0] if part[0]])
-            return translated
+            return "".join([part[0] for part in data[0] if part[0]])
     except Exception:
         return text
 
@@ -114,20 +113,20 @@ def calculate_ai_strategy(close_series, high_series, low_series, current_price, 
     ], axis=1).max(axis=1)
     atr = float(tr.rolling(window=14).mean().iloc[-1]) if len(tr) >= 14 else (current_price * 0.03)
 
-    # 1. AI 목표 익절가
+    # 1. 목표 익절선
     resistance = max(bb_upper, recent_high)
     if resistance <= current_price:
         target_sell = round(current_price + (atr * 1.8), 2)
     else:
         target_sell = round(resistance, 2)
 
-    # 2. AI 추천 매수가 (20일선 눌림목)
+    # 2. 추천 매수선 (눌림목)
     if current_price > ma20:
         target_buy = round(ma20, 2)
     else:
         target_buy = round(max(bb_lower, recent_low), 2)
 
-    # 3. AI 손절 방어선
+    # 3. 손절 방어선
     support = min(ma20, bb_lower)
     ai_stop_loss = round(support - (atr * 0.8), 2)
     if ai_stop_loss >= current_price or (current_price - ai_stop_loss) > (current_price * 0.12):
@@ -135,7 +134,7 @@ def calculate_ai_strategy(close_series, high_series, low_series, current_price, 
 
     return target_sell, target_buy, ai_stop_loss
 
-def analyze_ticker_full(item: dict, exchange_rate: float):
+def analyze_ticker_full(item: dict, exchange_rate: float, exchange_rate_change: float):
     raw_ticker = str(item.get("ticker", "VRT")).upper().strip()
     ticker = "GOOGL" if raw_ticker == "GOOGLE" else raw_ticker
     
@@ -165,7 +164,7 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
 
         current_price = float(close_s.iloc[-1])
 
-        # 최근 60거래일(약 3달) 캔들 추출
+        # 최근 60거래일(약 3달) 캔들 데이터 슬림 추출
         recent_df = pd.DataFrame({'Open': open_s, 'High': high_s, 'Low': low_s, 'Close': close_s}).tail(60)
         for _, row in recent_df.iterrows():
             candles.append({
@@ -251,7 +250,8 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
         "eval_krw": eval_krw,
         "candles": candles,
         "news": news_items,
-        "exchange_rate": exchange_rate
+        "exchange_rate": exchange_rate,
+        "exchange_rate_change": exchange_rate_change
     }
 
 @app.get("/")
@@ -262,17 +262,24 @@ def root():
 def get_stocks():
     stocks = load_stocks()
     rate = 1350.0
+    rate_change = 0.0
     try:
-        usd_df = yf.download("KRW=X", period="1d", progress=False)
+        # 실시간 환율 및 전일 대비 변동 계산
+        usd_df = yf.download("KRW=X", period="5d", interval="1d", progress=False)
         if usd_df is not None and not usd_df.empty:
             if isinstance(usd_df.columns, pd.MultiIndex):
-                rate = float(usd_df["Close"].iloc[-1].values[0])
+                close_series = usd_df["Close"].iloc[:, 0].dropna()
             else:
-                rate = float(usd_df["Close"].iloc[-1])
-    except Exception:
-        pass
+                close_series = usd_df["Close"].dropna()
+            
+            if len(close_series) >= 1:
+                rate = float(close_series.iloc[-1])
+            if len(close_series) >= 2:
+                rate_change = float(close_series.iloc[-1] - close_series.iloc[-2])
+    except Exception as e:
+        print(f"Exchange rate fetch error: {e}")
 
-    return [analyze_ticker_full(s, rate) for s in stocks]
+    return [analyze_ticker_full(s, round(rate, 2), round(rate_change, 2)) for s in stocks]
 
 @app.post("/api/stocks")
 def add_stock(item: StockItem):
@@ -293,6 +300,28 @@ def add_stock(item: StockItem):
     })
     save_stocks(stocks)
     return {"status": "success", "message": f"{ticker_up} 등록 완료"}
+
+@app.put("/api/stocks/{ticker}")
+def update_stock(ticker: str, item: StockItem):
+    stocks = load_stocks()
+    ticker_up = ticker.upper().strip()
+    if ticker_up == "GOOGLE":
+        ticker_up = "GOOGL"
+
+    found = False
+    for s in stocks:
+        if s.get("ticker", "").upper() == ticker_up:
+            s["is_holding"] = item.is_holding
+            s["avg_price"] = item.avg_price
+            s["quantity"] = item.quantity
+            found = True
+            break
+
+    if not found:
+        raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다.")
+    
+    save_stocks(stocks)
+    return {"status": "success", "message": f"{ticker_up} 수정 완료"}
 
 @app.delete("/api/stocks/{ticker}")
 def delete_stock(ticker: str):
