@@ -7,6 +7,8 @@ from typing import Optional, List
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import urllib.request
+import urllib.parse
 
 app = FastAPI(title="Stock Watchtower AI Strategy Engine")
 
@@ -55,18 +57,33 @@ class StockItem(BaseModel):
     avg_price: Optional[float] = None
     quantity: Optional[float] = 0.0
 
+def translate_to_korean(text: str) -> str:
+    """영문 뉴스를 한국어로 간이 번역하는 안전 함수"""
+    if not text:
+        return ""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q=" + urllib.parse.quote(text)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            translated = "".join([part[0] for part in data[0] if part[0]])
+            return translated
+    except Exception:
+        return text
+
 def fetch_safe_news(ticker: str):
     news_items = []
     try:
         t = yf.Ticker(ticker)
         raw_news = getattr(t, "news", []) or []
-        for n in raw_news[:3]:
+        for n in raw_news[:2]:
             title = n.get("title") or (n.get("content", {}).get("title") if isinstance(n.get("content"), dict) else "")
             publisher = n.get("publisher") or (n.get("content", {}).get("provider", {}).get("displayName") if isinstance(n.get("content"), dict) else "MarketNews")
             link = n.get("link") or (n.get("content", {}).get("canonicalUrl", {}).get("url") if isinstance(n.get("content"), dict) else "")
             if title:
+                ko_title = translate_to_korean(str(title))
                 news_items.append({
-                    "title": str(title),
+                    "title": ko_title,
                     "publisher": str(publisher or "MarketNews"),
                     "link": str(link or f"https://finance.yahoo.com/quote/{ticker}")
                 })
@@ -123,46 +140,52 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
     quantity = float(item.get("quantity", 0.0) or 0.0)
 
     news_items = fetch_safe_news(ticker)
-    chart_points = []
+    candles = []
 
     try:
-        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
-        if df is None or len(df) < 10:
+        df = yf.download(ticker, period="1mo", interval="1d", progress=False)
+        if df is None or len(df) < 5:
             raise ValueError("데이터 부족")
 
         if isinstance(df.columns, pd.MultiIndex):
-            close_series = df["Close"][ticker]
-            high_series = df["High"][ticker]
-            low_series = df["Low"][ticker]
+            close_s = df["Close"][ticker].dropna()
+            open_s = df["Open"][ticker].dropna()
+            high_s = df["High"][ticker].dropna()
+            low_s = df["Low"][ticker].dropna()
         else:
-            close_series = df["Close"]
-            high_series = df["High"]
-            low_series = df["Low"]
+            close_s = df["Close"].dropna()
+            open_s = df["Open"].dropna()
+            high_s = df["High"].dropna()
+            low_s = df["Low"].dropna()
 
-        close_series = close_series.dropna()
-        high_series = high_series.dropna()
-        low_series = low_series.dropna()
-        current_price = float(close_series.iloc[-1])
+        current_price = float(close_s.iloc[-1])
 
-        # 최근 30거래일 종가 추출 (그래프 렌더링용)
-        chart_points = [round(float(p), 2) for p in close_series.tail(30).tolist()]
+        # 최근 15개 봉의 양봉/음봉 캔들 데이터 추출 [Open, High, Low, Close]
+        recent_df = pd.DataFrame({'Open': open_s, 'High': high_s, 'Low': low_s, 'Close': close_s}).tail(15)
+        for _, row in recent_df.iterrows():
+            candles.append({
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2)
+            })
 
-        ma5 = float(close_series.rolling(window=min(5, len(close_series))).mean().iloc[-1])
-        ma20 = float(close_series.rolling(window=min(20, len(close_series))).mean().iloc[-1])
-        ma60 = float(close_series.rolling(window=min(60, len(close_series))).mean().iloc[-1])
+        ma5 = float(close_s.rolling(window=min(5, len(close_s))).mean().iloc[-1])
+        ma20 = float(close_s.rolling(window=min(20, len(close_s))).mean().iloc[-1])
+        ma60 = float(close_s.rolling(window=min(60, len(close_s))).mean().iloc[-1]) if len(close_s) >= 60 else ma20
 
-        delta = close_series.diff()
+        delta = close_s.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(min(14, len(close_series))).mean().iloc[-1]
-        avg_loss = loss.rolling(min(14, len(close_series))).mean().iloc[-1]
+        avg_gain = gain.rolling(min(14, len(close_s))).mean().iloc[-1]
+        avg_loss = loss.rolling(min(14, len(close_s))).mean().iloc[-1]
         rsi = 50.0
         if avg_loss > 0:
             rs = avg_gain / avg_loss
             rsi = float(100 - (100 / (1 + rs)))
 
-        ema12 = close_series.ewm(span=12, adjust=False).mean()
-        ema26 = close_series.ewm(span=26, adjust=False).mean()
+        ema12 = close_s.ewm(span=12, adjust=False).mean()
+        ema26 = close_s.ewm(span=26, adjust=False).mean()
         macd_line = ema12 - ema26
         signal_line = macd_line.ewm(span=9, adjust=False).mean()
         macd = float(macd_line.iloc[-1])
@@ -180,13 +203,13 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
         ai_score = int(min(max(score, 15), 98))
 
         target_sell, target_buy, stop_loss = calculate_ai_strategy(
-            close_series, high_series, low_series, current_price, avg_price, is_holding
+            close_s, high_s, low_s, current_price, avg_price, is_holding
         )
 
     except Exception as e:
         print(f"Fallback for {ticker}: {e}")
         current_price = avg_price if (avg_price and avg_price > 0) else 100.0
-        chart_points = [current_price] * 10
+        candles = [{"open": current_price, "high": current_price, "low": current_price, "close": current_price}] * 10
         ma5 = ma20 = ma60 = current_price
         rsi = 50.0
         macd = 0.0
@@ -221,7 +244,7 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
         "profit_rate": profit_rate,
         "profit_krw": profit_krw,
         "eval_krw": eval_krw,
-        "chart_data": chart_points,
+        "candles": candles,
         "news": news_items,
         "exchange_rate": exchange_rate
     }
