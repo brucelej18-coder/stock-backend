@@ -1,20 +1,32 @@
 [
   {
-    "ticker": "NVDA",
+    "ticker": "VRT",
     "is_holding": true,
-    "avg_price": 120.0,
-    "quantity": 10.0
+    "avg_price": 243.44,
+    "quantity": 0.082439
   },
   {
-    "ticker": "TSLA",
+    "ticker": "AVGO",
     "is_holding": true,
-    "avg_price": 240.0,
-    "quantity": 5.0
+    "avg_price": 348.93,
+    "quantity": 0.136757
+  },
+  {
+    "ticker": "GOOGL",
+    "is_holding": true,
+    "avg_price": 350.13,
+    "quantity": 0.274143
   },
   {
     "ticker": "AAPL",
-    "is_holding": false,
-    "avg_price": null,
-    "quantity": 0.0
+    "is_holding": true,
+    "avg_price": 308.57,
+    "quantity": 0.337598
+  },
+  {
+    "ticker": "SPYG",
+    "is_holding": true,
+    "avg_price": 118.3,
+    "quantity": 1.304608
   }
 ]
