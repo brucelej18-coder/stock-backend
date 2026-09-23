@@ -21,7 +21,6 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "stocks_data.json")
 
-# 사용자의 실제 5개 보유 종목으로 영구 고정
 DEFAULT_STOCKS = [
     {"ticker": "VRT", "is_holding": True, "avg_price": 243.44, "quantity": 0.082439},
     {"ticker": "AVGO", "is_holding": True, "avg_price": 348.93, "quantity": 0.136757},
@@ -97,20 +96,17 @@ def calculate_ai_strategy(close_series, high_series, low_series, current_price, 
     ], axis=1).max(axis=1)
     atr = float(tr.rolling(window=14).mean().iloc[-1]) if len(tr) >= 14 else (current_price * 0.03)
 
-    # 1. AI 목표 익절가
     resistance = max(bb_upper, recent_high)
     if resistance <= current_price:
         target_sell = round(current_price + (atr * 1.8), 2)
     else:
         target_sell = round(resistance, 2)
 
-    # 2. AI 추천 매수가 (눌림목 지지)
     if current_price > ma20:
         target_buy = round(ma20, 2)
     else:
         target_buy = round(max(bb_lower, recent_low), 2)
 
-    # 3. AI 손절 방어선
     support = min(ma20, bb_lower)
     ai_stop_loss = round(support - (atr * 0.8), 2)
     if ai_stop_loss >= current_price or (current_price - ai_stop_loss) > (current_price * 0.12):
@@ -127,6 +123,7 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
     quantity = float(item.get("quantity", 0.0) or 0.0)
 
     news_items = fetch_safe_news(ticker)
+    chart_points = []
 
     try:
         df = yf.download(ticker, period="3mo", interval="1d", progress=False)
@@ -146,6 +143,9 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
         high_series = high_series.dropna()
         low_series = low_series.dropna()
         current_price = float(close_series.iloc[-1])
+
+        # 최근 30거래일 종가 추출 (그래프 렌더링용)
+        chart_points = [round(float(p), 2) for p in close_series.tail(30).tolist()]
 
         ma5 = float(close_series.rolling(window=min(5, len(close_series))).mean().iloc[-1])
         ma20 = float(close_series.rolling(window=min(20, len(close_series))).mean().iloc[-1])
@@ -186,6 +186,7 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
     except Exception as e:
         print(f"Fallback for {ticker}: {e}")
         current_price = avg_price if (avg_price and avg_price > 0) else 100.0
+        chart_points = [current_price] * 10
         ma5 = ma20 = ma60 = current_price
         rsi = 50.0
         macd = 0.0
@@ -196,6 +197,8 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
 
     profit_rate = 0.0
     profit_krw = 0
+    eval_krw = int(current_price * quantity * exchange_rate) if (quantity and quantity > 0) else 0
+
     if avg_price and avg_price > 0:
         profit_rate = round(((current_price - avg_price) / avg_price) * 100, 2)
         profit_krw = int((current_price - avg_price) * quantity * exchange_rate)
@@ -217,6 +220,8 @@ def analyze_ticker_full(item: dict, exchange_rate: float):
         "stop_loss": stop_loss,
         "profit_rate": profit_rate,
         "profit_krw": profit_krw,
+        "eval_krw": eval_krw,
+        "chart_data": chart_points,
         "news": news_items,
         "exchange_rate": exchange_rate
     }
